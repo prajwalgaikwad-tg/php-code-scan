@@ -421,17 +421,30 @@ _fetch_gitleaks() {
   [ -x "$GITLEAKS_BIN" ] && return 0
   [ "$ALLOW_FETCH" = "yes" ] || return 1
   [ "$INTERNET" = "yes" ]    || return 1
+  have curl || return 1
   local gl_os gl_arch
   case "$OS" in Linux) gl_os="linux" ;; Darwin) gl_os="darwin" ;; *) return 1 ;; esac
   case "$ARCH" in x86_64) gl_arch="x64" ;; arm64) gl_arch="arm64" ;; *) return 1 ;; esac
-  # Resolve the latest release asset name pattern: gitleaks_<ver>_<os>_<arch>.tar.gz
-  local url="https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_8.28.0_${gl_os}_${gl_arch}.tar.gz"
+
+  # Resolve the actual latest release asset URL via the GitHub API (robust;
+  # no hardcoded version that can 404). Fall back to a known-good version.
+  local api="https://api.github.com/repos/gitleaks/gitleaks/releases/latest"
+  local url=""
+  url="$(curl -fsSL "$api" 2>/dev/null \
+        | grep -oE '"browser_download_url": *"[^"]*"' \
+        | sed -E 's/.*"(https[^"]+)".*/\1/' \
+        | grep -E "_${gl_os}_${gl_arch}\.tar\.gz$" \
+        | head -1)"
+  if [ -z "$url" ]; then
+    # Fallback: try a recent tagged release directly.
+    local v="8.21.2"
+    url="https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_${gl_os}_${gl_arch}.tar.gz"
+  fi
+
   local tmp="$BIN_DIR/gitleaks-dl.tar.gz"
-  if have curl; then curl -fsSL -o "$tmp" "$url" 2>/dev/null
-  elif have wget; then wget -q -O "$tmp" "$url" 2>/dev/null
-  else return 1; fi
+  curl -fsSL -o "$tmp" "$url" 2>>"$RAW_DIR/gitleaks.log" || return 1
   [ -s "$tmp" ] || return 1
-  tar xzf "$tmp" -C "$BIN_DIR" gitleaks 2>/dev/null || { tar xzf "$tmp" -C "$BIN_DIR" 2>/dev/null; }
+  tar xzf "$tmp" -C "$BIN_DIR" gitleaks 2>/dev/null || tar xzf "$tmp" -C "$BIN_DIR" 2>/dev/null
   rm -f "$tmp"
   [ -f "$BIN_DIR/gitleaks" ] && chmod +x "$BIN_DIR/gitleaks" && return 0
   return 1
