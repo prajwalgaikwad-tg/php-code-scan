@@ -1,0 +1,10 @@
+# Fetched tools and cached data — regenerated on each run, never committed.
+bin/
+cache/
+
+# Scan outputs — generated per run, not source.
+reports/
+
+# OS cruft
+.DS_Store
+Thumbs.db
