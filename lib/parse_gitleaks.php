@@ -37,13 +37,30 @@ foreach ($data as $hit) {
     if ($target && strpos($file, $target) === 0) $file = ltrim(substr($file, strlen($target)), '/');
     $line = (string)($hit['StartLine'] ?? '');
 
+    // Severity by rule type: concrete credential formats are critical; the
+    // broad "generic-api-key" rule is noisier, so mark it medium/needs-review.
+    $r = strtolower($rule);
+    if (strpos($r, 'generic') !== false) {
+        $sev = 'medium';
+    } elseif (strpos($r, 'private-key') !== false || strpos($r, 'aws') !== false
+           || strpos($r, 'azure') !== false || strpos($r, 'gcp') !== false
+           || strpos($r, 'rsa') !== false || strpos($r, 'ssh') !== false) {
+        $sev = 'critical';
+    } else {
+        $sev = 'high';
+    }
+    // Secrets in an .env / backup / config file are especially serious.
+    if (preg_match('/\.env(\.|_|$)|\.env_bkp|config\.php$/i', $file) && $sev === 'medium') {
+        $sev = 'high';
+    }
+
     // Deliberately do NOT include the secret value in the report.
     $full = "A hardcoded secret/credential was detected ($rule). In plain terms: a password, API key, "
           . "or token appears to be written directly into a file. If this file is ever exposed (backup, "
           . "repo leak, misconfigured server), the secret is compromised. Detail: $desc";
 
     echo '{'
-        . '"severity":'       . jstr('high') . ','
+        . '"severity":'       . jstr($sev) . ','
         . '"category":'       . jstr('Hardcoded secret') . ','
         . '"title":'          . jstr('Hardcoded secret: ' . $rule) . ','
         . '"description":'    . jstr($full) . ','

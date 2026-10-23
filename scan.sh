@@ -453,8 +453,33 @@ _fetch_gitleaks() {
 log "Running secrets scan (gitleaks)..."
 if [ ! -x "$GITLEAKS_BIN" ]; then _fetch_gitleaks || true; fi
 if [ -x "$GITLEAKS_BIN" ]; then
+  # Write a gitleaks config that extends the default rules but allowlists
+  # runtime/non-source paths. Without this, framework session stores
+  # (e.g. CodeIgniter ci_sessions/ holding JWTs), vendor test fixtures, and
+  # build assets produce thousands of false positives.
+  GITLEAKS_CFG="$CACHE_DIR/gitleaks.toml"
+  cat > "$GITLEAKS_CFG" <<'TOML'
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Exclude runtime, vendor, and non-source paths from secret scanning"
+paths = [
+  '''(^|/)vendor/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.git/''',
+  '''(^|/)ci_sessions/''',
+  '''(^|/)sessions?/''',
+  '''(^|/)cache/''',
+  '''(^|/)writable/''',
+  '''(^|/)logs?/''',
+  '''(^|/)tmp/''',
+  '''(^|/)storage/''',
+  '''\.(min\.js|js\.map|css|map|lock|log)$''',
+]
+TOML
   # 'detect --no-git' scans the filesystem (not git history), read-only.
-  "$GITLEAKS_BIN" detect --source "$TARGET" --no-git \
+  "$GITLEAKS_BIN" detect --source "$TARGET" --no-git -c "$GITLEAKS_CFG" \
     --report-format json --report-path "$RAW_DIR/gitleaks.json" \
     --exit-code 0 >/dev/null 2>"$RAW_DIR/gitleaks.log" || true
   if have php && [ -s "$RAW_DIR/gitleaks.json" ]; then

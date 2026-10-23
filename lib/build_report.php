@@ -49,9 +49,16 @@ $semgrepRan = ($ctx['semgrep'] === 'yes');
  */
 function confidence_of(array $f): string {
     $src = strtolower($f['source'] ?? '');
-    if (strpos($src, 'composer') !== false || strpos($src, 'wordfence') !== false) return 'Confirmed';
-    if (strpos($src, 'semgrep') !== false) return 'Analyzed';
     if (($f['category'] ?? '') === 'Coverage gap' || ($f['category'] ?? '') === 'Coverage note') return 'Info';
+    // Confirmed: published CVEs, and leaked-secret detections (gitleaks) and the
+    // PHP runtime check — these are concrete, verified facts, not guesses.
+    if (strpos($src, 'composer') !== false || strpos($src, 'wordfence') !== false) return 'Confirmed';
+    if (strpos($src, 'gitleaks') !== false) return 'Confirmed';
+    if (strpos($src, 'runtime check') !== false) return 'Confirmed';
+    // Analyzed: context-aware engine findings.
+    if (strpos($src, 'semgrep') !== false) return 'Analyzed';
+    if (strpos($src, 'runtime config') !== false) return 'Analyzed';
+    // Everything else (built-in regex patterns) is a lead to review.
     return 'Review';
 }
 
