@@ -222,7 +222,9 @@ ok "Platform         : $OS / $ARCH"
 ok "Internet access  : $INTERNET"
 
 PHP_FILE_COUNT="$(find "$TARGET" -type f -name '*.php' \
-  -not -path '*/vendor/*' -not -path '*/node_modules/*' 2>/dev/null | wc -l | tr -d ' ')"
+  -not -path '*/vendor/*' -not -path '*/vendor_bkp/*' -not -path '*/vendor_backup/*' \
+  -not -path '*/node_modules/*' -not -path '*/writable/*' -not -path '*/ci_sessions/*' \
+  2>/dev/null | wc -l | tr -d ' ')"
 ok "PHP files        : $PHP_FILE_COUNT (excluding vendor/node_modules)"
 echo
 
@@ -389,6 +391,9 @@ if [ -n "$SEMGREP_CMD" ]; then
   if $SEMGREP_CMD \
        --config p/php --config p/security-audit \
        --config p/owasp-top-ten --config p/secrets --config p/xss \
+       --exclude 'vendor' --exclude 'vendor_bkp' --exclude 'vendor_backup' \
+       --exclude 'node_modules' --exclude 'writable' --exclude 'ci_sessions' \
+       --exclude '*_bkp' --exclude '*_backup' --exclude '*-bak' \
        --json --output "$RAW_DIR/semgrep.json" "$TARGET" >/dev/null 2>"$RAW_DIR/semgrep.log"; then
     ok "Semgrep completed."
   else
@@ -463,18 +468,20 @@ if [ -x "$GITLEAKS_BIN" ]; then
 useDefault = true
 
 [allowlist]
-description = "Exclude runtime, vendor, and non-source paths from secret scanning"
+description = "Exclude runtime, vendor, backup, and non-source paths from secret scanning"
 paths = [
-  '''(^|/)vendor/''',
+  '''(^|/)vendor(_bkp|_backup|-bak)?/''',
   '''(^|/)node_modules/''',
   '''(^|/)\.git/''',
   '''(^|/)ci_sessions/''',
   '''(^|/)sessions?/''',
   '''(^|/)cache/''',
   '''(^|/)writable/''',
+  '''(^|/)debugbar/''',
   '''(^|/)logs?/''',
   '''(^|/)tmp/''',
   '''(^|/)storage/''',
+  '''.*(_bkp|_backup|-bak|\.bak)/.*''',
   '''\.(min\.js|js\.map|css|map|lock|log)$''',
 ]
 TOML
@@ -506,7 +513,10 @@ scan_pattern() {
     local rel="${f#"$TARGET"/}"
     add_finding "$sev" "$cat" "$title" "$desc" "$rel" "$ln" "$rec" "built-in pattern"
   done < <(grep -rInE "$regex" "$TARGET" \
-             --include='*.php' --exclude-dir=vendor --exclude-dir=node_modules --exclude-dir=.git \
+             --include='*.php' \
+             --exclude-dir=vendor --exclude-dir='vendor_bkp' --exclude-dir='vendor_backup' \
+             --exclude-dir=node_modules --exclude-dir=.git \
+             --exclude-dir=writable --exclude-dir=ci_sessions \
              2>/dev/null | head -n 200)
 }
 
@@ -743,8 +753,8 @@ if [ -n "$S3_DEST" ]; then
   if have aws; then
     dest="${S3_DEST%/}/$REPORT_NAME/"
     log "Uploading report to $dest ..."
-    if aws s3 cp "$OUT_DIR/report.html" "$dest" >/dev/null 2>"$RAW_DIR/s3.log" \
-       && aws s3 cp "$OUT_DIR/report.json" "$dest" >/dev/null 2>>"$RAW_DIR/s3.log"; then
+    if aws s3 cp "$OUT_DIR/$REPORT_NAME.html" "$dest" >/dev/null 2>"$RAW_DIR/s3.log" \
+       && aws s3 cp "$OUT_DIR/$REPORT_NAME.json" "$dest" >/dev/null 2>>"$RAW_DIR/s3.log"; then
       ok "Report uploaded to $dest"
     else
       warn "S3 upload failed (see raw/s3.log). Check the instance IAM role has s3:PutObject on the bucket."
@@ -758,8 +768,8 @@ echo
 echo "${C_BOLD}Done.${C_OFF}"
 echo "  Host         : $HOSTNAME_FULL ($HOST_IP)${EC2_INSTANCE_ID:+  [$EC2_INSTANCE_ID / $EC2_REGION]}"
 echo "  Report name  : $REPORT_NAME"
-echo "  Human report : $OUT_DIR/report.html"
-echo "  Data report  : $OUT_DIR/report.json"
+echo "  Human report : $OUT_DIR/$REPORT_NAME.html"
+echo "  Data report  : $OUT_DIR/$REPORT_NAME.json"
 echo "  Raw tool logs: $RAW_DIR/"
 [ -n "$S3_DEST" ] && echo "  S3 target    : ${S3_DEST%/}/$REPORT_NAME/"
 echo "  (Run './scan.sh --cleanup' to remove fetched tools, keeping reports.)"

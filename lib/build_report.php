@@ -310,10 +310,15 @@ $jsonReport = [
     'distinct_problems'    => $problemList,
     'appendix_pattern_matches' => $appendix,
 ];
-file_put_contents(
-    "$outDir/report.json",
-    json_encode($jsonReport, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-);
+// Descriptive base name (hostname_timestamp) so an exported file is self-identifying.
+$base = $ctx['report_name'] !== '' ? $ctx['report_name'] : ('report_' . $ctx['stamp']);
+// Sanitise just in case.
+$base = preg_replace('/[^A-Za-z0-9._-]/', '-', $base);
+
+$jsonStr = json_encode($jsonReport, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+file_put_contents("$outDir/$base.json", $jsonStr);
+// Keep a stable report.json alias so existing tooling/paths still work.
+file_put_contents("$outDir/report.json", $jsonStr);
 
 // ---- Write HTML report ---------------------------------------------------
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
@@ -605,6 +610,8 @@ ob_start();
 </html>
 <?php
 $html = ob_get_clean();
+file_put_contents("$outDir/$base.html", $html);
+// Keep a stable report.html alias so existing tooling/paths still work.
 file_put_contents("$outDir/report.html", $html);
 
 fwrite(STDERR, "report: $distinctProblemCount distinct problems ($totalOccurrences occurrences), "
