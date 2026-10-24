@@ -357,20 +357,39 @@ echo
 # 3. Dependency vulnerability scan (composer audit)
 # ---------------------------------------------------------------------------
 if [ "$IS_COMPOSER" = "yes" ]; then
-  if have composer; then
+  # Resolve a usable composer. The distro-packaged composer is often an old
+  # build that spews PHP deprecation notices on newer PHP (8.4/8.5), polluting
+  # output. So: fetch the official composer.phar into bin/ and prefer it; only
+  # fall back to the system composer if we can't get the phar.
+  COMPOSER_PHP="$(command -v php)"
+  COMPOSER_PHAR="$BIN_DIR/composer.phar"
+  _fetch_composer_phar() {
+    [ -f "$COMPOSER_PHAR" ] && return 0
+    [ "$ALLOW_FETCH" = "yes" ] || return 1
+    [ "$INTERNET" = "yes" ]    || return 1
+    have curl || return 1
+    curl -fsSL -o "$COMPOSER_PHAR" https://getcomposer.org/download/latest-stable/composer.phar 2>>"$RAW_DIR/composer.log" || return 1
+    [ -s "$COMPOSER_PHAR" ] || return 1
+    return 0
+  }
+
+  COMPOSER_RUN=""   # how we invoke composer, if at all
+  if [ -n "$COMPOSER_PHP" ] && { [ -f "$COMPOSER_PHAR" ] || _fetch_composer_phar; }; then
+    COMPOSER_RUN="phar"
+  elif have composer; then
+    COMPOSER_RUN="system"
+  fi
+
+  if [ -n "$COMPOSER_RUN" ]; then
     log "Running dependency vulnerability scan (composer audit)..."
-    # Run composer through PHP with deprecations silenced, so stray
-    # "Deprecated: ..." notices (common with an older composer on PHP 8.4/8.5)
-    # don't pollute the JSON output and break parsing.
-    COMPOSER_PHP="$(command -v php)"
-    COMPOSER_BIN="$(command -v composer)"
     _run_composer_audit() {
       local fmt="$1" out="$2"
-      if [ -n "$COMPOSER_PHP" ] && [ -n "$COMPOSER_BIN" ]; then
+      if [ "$COMPOSER_RUN" = "phar" ]; then
+        # Official phar runs clean on current PHP; still silence deprecations defensively.
         COMPOSER_NO_INTERACTION=1 "$COMPOSER_PHP" \
           -d error_reporting='E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED & ~E_STRICT' \
           -d display_errors=0 \
-          "$COMPOSER_BIN" audit --working-dir="$TARGET" --no-interaction --format="$fmt" \
+          "$COMPOSER_PHAR" audit --working-dir="$TARGET" --no-interaction --format="$fmt" \
           > "$out" 2>>"$RAW_DIR/composer.log"
       else
         composer audit --working-dir="$TARGET" --format="$fmt" > "$out" 2>>"$RAW_DIR/composer.log"
@@ -405,12 +424,12 @@ if [ "$IS_COMPOSER" = "yes" ]; then
         "scanner"
     fi
   else
-    warn "Composer project found but 'composer' is not installed; skipping dependency scan."
-    add_finding "info" "Coverage gap" \
-      "Dependency scan skipped (composer not installed)" \
-      "This is a Composer-based project, but the 'composer' tool is not available on this server, so third-party libraries were not checked for known vulnerabilities." \
+    warn "No usable composer (phar fetch failed and no system composer); skipping dependency scan."
+    add_finding "high" "Coverage gap" \
+      "Dependency scan did NOT run — no usable composer available" \
+      "This is a Composer-based project, but no working composer was available (the official composer.phar could not be downloaded and no system composer is present), so third-party libraries were NOT checked for known vulnerabilities. Do not interpret this as 'no vulnerable dependencies'." \
       "composer.json" "" \
-      "Install Composer (or run this scan where Composer is available) to enable dependency CVE checks." \
+      "Provide internet access so the tool can fetch composer.phar, or install a PHP-compatible composer, then re-scan." \
       "scanner"
   fi
   echo
