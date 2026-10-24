@@ -359,17 +359,50 @@ echo
 if [ "$IS_COMPOSER" = "yes" ]; then
   if have composer; then
     log "Running dependency vulnerability scan (composer audit)..."
-    # JSON output lets us emit one finding per advisory with real severity.
-    composer audit --working-dir="$TARGET" --format=json > "$RAW_DIR/composer-audit.json" 2>/dev/null || true
-    composer audit --working-dir="$TARGET" --format=plain > "$RAW_DIR/composer-audit.txt" 2>&1 || true
+    # Run composer through PHP with deprecations silenced, so stray
+    # "Deprecated: ..." notices (common with an older composer on PHP 8.4/8.5)
+    # don't pollute the JSON output and break parsing.
+    COMPOSER_PHP="$(command -v php)"
+    COMPOSER_BIN="$(command -v composer)"
+    _run_composer_audit() {
+      local fmt="$1" out="$2"
+      if [ -n "$COMPOSER_PHP" ] && [ -n "$COMPOSER_BIN" ]; then
+        COMPOSER_NO_INTERACTION=1 "$COMPOSER_PHP" \
+          -d error_reporting='E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED & ~E_STRICT' \
+          -d display_errors=0 \
+          "$COMPOSER_BIN" audit --working-dir="$TARGET" --no-interaction --format="$fmt" \
+          > "$out" 2>>"$RAW_DIR/composer.log"
+      else
+        composer audit --working-dir="$TARGET" --format="$fmt" > "$out" 2>>"$RAW_DIR/composer.log"
+      fi
+    }
+    _run_composer_audit json  "$RAW_DIR/composer-audit.json" || true
+    _run_composer_audit plain "$RAW_DIR/composer-audit.txt"  || true
+
+    # Guard: trust the JSON only if it actually parses as JSON. Otherwise the
+    # dependency check effectively failed — report that, never a silent "0".
+    JSON_OK="no"
     if [ -s "$RAW_DIR/composer-audit.json" ] && have php; then
+      if php -r '$d=json_decode(file_get_contents($argv[1]),true); exit(is_array($d)?0:1);' \
+           "$RAW_DIR/composer-audit.json" 2>/dev/null; then
+        JSON_OK="yes"
+      fi
+    fi
+
+    if [ "$JSON_OK" = "yes" ]; then
       if php "$LIB_DIR/parse_composer.php" "$RAW_DIR/composer-audit.json" >> "$JSON_FINDINGS" 2>>"$RAW_DIR/composer.log"; then
         ok "Dependency advisories parsed into findings."
       else
         warn "Could not parse composer JSON; see raw/composer-audit.txt."
       fi
     else
-      ok "No dependency advisories (or composer produced no JSON)."
+      warn "composer audit did not produce valid JSON (likely deprecation noise or an error)."
+      add_finding "high" "Coverage gap" \
+        "Dependency scan did not complete — results unreadable" \
+        "composer audit ran but its output could not be read as valid data (often caused by an older composer emitting PHP deprecation warnings on a newer PHP version). Dependencies were therefore NOT checked for known vulnerabilities on this server. Do not interpret this as 'no vulnerable dependencies'." \
+        "composer.lock" "" \
+        "Use a composer build compatible with this PHP version (e.g. the official composer.phar), or run the dependency check from a machine with a matching composer. Then re-scan. See raw/composer-audit.txt." \
+        "scanner"
     fi
   else
     warn "Composer project found but 'composer' is not installed; skipping dependency scan."
